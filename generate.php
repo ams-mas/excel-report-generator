@@ -37,47 +37,65 @@ function esc(mixed $value): string {
 try {
     $spreadsheet = IOFactory::load($_FILES['excel_file']['tmp_name']);
     $sheet = $spreadsheet->getActiveSheet();
-    $rows = $sheet->toArray(null, true, true, false);
-    $rows = array_values(array_filter($rows, static function ($row): bool {
+    $allRows = $sheet->toArray(null, true, true, false);
+    $allRows = array_values(array_filter($allRows, static function ($row): bool {
         foreach ($row as $value) {
             if (trim((string)$value) !== '') return true;
         }
         return false;
     }));
 
-    if (count($rows) < 2) {
-        throw new RuntimeException('فایل اکسل باید شامل ردیف عنوان و حداقل یک ردیف معلومات باشد.');
+    if (count($allRows) < 2) {
+        throw new RuntimeException('فایل اکسل باید شامل ردیف عنوان و حداقل یک شاگرد باشد.');
     }
 
-    $headers = array_map(static function ($value, $index): string {
-        $label = trim((string)$value);
-        return $label !== '' ? $label : 'ستون ' . ($index + 1);
-    }, $rows[0], array_keys($rows[0]));
-    $records = array_slice($rows, 1);
-    $columnCount = count($headers);
+    $sourceHeaders = array_map(static fn($v) => strtolower(trim((string)$v)), $allRows[0]);
+    $findColumn = static function (array $headers, array $aliases): ?int {
+        foreach ($headers as $i => $header) {
+            $normalized = preg_replace('/[\\s_\\-]+/', '', (string)$header);
+            foreach ($aliases as $alias) {
+                if ($normalized === preg_replace('/[\\s_\\-]+/', '', strtolower($alias))) return $i;
+            }
+        }
+        return null;
+    };
 
-    // The reference report uses two side-by-side student-list sections.
+    $noCol = $findColumn($sourceHeaders, ['no', 'number', 'studentno', 'شماره', 'نمبر']);
+    $nameCol = $findColumn($sourceHeaders, ['name', 'studentname', 'نام', 'نامشاگرد']);
+    $fatherCol = $findColumn($sourceHeaders, ['fathername', 'father', 'نامپدر', 'نامپدرشاگرد']);
+    if ($nameCol === null || $fatherCol === null) {
+        throw new RuntimeException('ستون‌های name و fathername پیدا نشدند. لطفاً عنوان ستون‌ها را مطابق فایل نمونه نگه دارید.');
+    }
+
+    // Exclude template/numbering rows that have no student name or father's name.
+    $records = [];
+    foreach (array_slice($allRows, 1) as $row) {
+        $name = trim((string)($row[$nameCol] ?? ''));
+        $father = trim((string)($row[$fatherCol] ?? ''));
+        if ($name === '' && $father === '') continue;
+        $number = $noCol !== null ? trim((string)($row[$noCol] ?? '')) : '';
+        $records[] = [
+            'no' => $number !== '' ? $number : (string)(count($records) + 1),
+            'name' => $name,
+            'father' => $father,
+        ];
+    }
+    if (!$records) throw new RuntimeException('هیچ شاگردی با نام یا نام پدر در فایل پیدا نشد.');
+
+    // Keep the supplied student number; do not add a duplicate serial column.
     $split = (int)ceil(count($records) / 2);
     $leftRecords = array_slice($records, 0, $split);
     $rightRecords = array_slice($records, $split);
 
-    $makeTable = static function (array $items, array $headers): string {
-        $html = '<table class="students"><thead><tr><th class="number">شماره</th>';
-        foreach ($headers as $header) $html .= '<th>' . esc($header) . '</th>';
-        $html .= '</tr></thead><tbody>';
-        foreach ($items as $index => $row) {
-            $html .= '<tr><td class="number">' . ($index + 1) . '</td>';
-            foreach ($headers as $col => $_header) {
-                $html .= '<td>' . esc($row[$col] ?? '') . '</td>';
-            }
-            $html .= '</tr>';
+    $makeTable = static function (array $items, int $startIndex): string {
+        $html = '<table class="students"><thead><tr><th class="number">شماره</th><th>نام شاگرد</th><th>نام پدر</th></tr></thead><tbody>';
+        foreach ($items as $record) {
+            $html .= '<tr><td class="number">' . esc($record['no']) . '</td><td>' . esc($record['name']) . '</td><td>' . esc($record['father']) . '</td></tr>';
         }
-        // Keep empty ruled lines so both sections look like a printable register.
+        // Add blank ruled rows for a register-style print layout without counting them as students.
         $targetRows = max(count($items), 12);
         for ($i = count($items); $i < $targetRows; $i++) {
-            $html .= '<tr><td class="number">' . ($i + 1) . '</td>';
-            for ($c = 0; $c < count($headers); $c++) $html .= '<td>&nbsp;</td>';
-            $html .= '</tr>';
+            $html .= '<tr><td class="number">&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td></tr>';
         }
         return $html . '</tbody></table>';
     };
@@ -91,7 +109,7 @@ try {
 
     $html = '<!doctype html><html lang="fa" dir="rtl"><head><meta charset="UTF-8"><style>
       @page { size: A4 landscape; margin: 10mm 9mm; }
-      body { font-family: DejaVu Sans, sans-serif; direction: rtl; color: #111; font-size: 8px; }
+      body { font-family: DejaVu Sans, sans-serif; direction: rtl; color: #111; font-size: 9px; }
       .top { width:100%; border-collapse:collapse; margin-bottom:5px; }
       .top td { border:0; vertical-align:middle; text-align:center; }
       .emblem { width:18%; font-size:8px; }
@@ -103,9 +121,9 @@ try {
       .columns { width:100%; border-collapse:collapse; table-layout:fixed; }
       .columns > tbody > tr > td { width:50%; vertical-align:top; padding:0 3px; }
       table.students { width:100%; border-collapse:collapse; table-layout:fixed; }
-      .students th,.students td { border:1px solid #222; padding:3px 2px; height:16px; text-align:center; vertical-align:middle; overflow-wrap:break-word; }
+      .students th,.students td { border:1px solid #222; padding:3px 2px; height:17px; text-align:center; vertical-align:middle; overflow-wrap:break-word; }
       .students th { font-weight:bold; background:#ececec; }
-      .students .number { width:22px; }
+      .students .number { width:35px; }
       .signatures { width:100%; border-collapse:collapse; margin-top:12px; }
       .signatures td { border:0; text-align:center; padding-top:16px; width:33.3%; }
       .signline { display:block; border-top:1px solid #333; margin:0 14px 4px; }
@@ -113,7 +131,7 @@ try {
     </style></head><body>
     <table class="top"><tr>
       <td class="emblem">نشان رسمی<br>وزارت معارف</td>
-      <td><h1>وزارت معارف</h1><h2>فورم ثبت و راپور شاگردان</h2><div class="subhead">فهرست معلومات مطابق فایل اکسل</div></td>
+      <td><h1>وزارت معارف</h1><h2>فورم ثبت و راپور شاگردان</h2><div class="subhead">فهرست شاگردان</div></td>
       <td class="emblem">مکتب / اداره<br>فورم رسمی</td>
     </tr></table>
     <table class="details"><tr>
@@ -123,7 +141,7 @@ try {
       <td>مضمون: ' . ($subject !== '' ? $subject : '&nbsp;') . '</td>
       <td>سال تعلیمی: ' . ($academicYear !== '' ? $academicYear : '&nbsp;') . '</td>
     </tr></table>
-    <table class="columns"><tr><td>' . $makeTable($leftRecords, $headers) . '</td><td>' . $makeTable($rightRecords, $headers) . '</td></tr></table>
+    <table class="columns"><tr><td>' . $makeTable($leftRecords, 0) . '</td><td>' . $makeTable($rightRecords, $split) . '</td></tr></table>
     <div class="note">تعداد مجموعی شاگردان: ' . count($records) . ' &nbsp;&nbsp; تاریخ: ' . $reportDate . '</div>
     <table class="signatures"><tr>
       <td><span class="signline"></span>امضای آموزگار</td>
