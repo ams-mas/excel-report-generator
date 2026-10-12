@@ -1,0 +1,10 @@
+{
+  "name": "ams-mas/excel-report-generator",
+  "description": "Import Excel lists and generate printable PDF reports",
+  "type": "project",
+  "require": {
+    "php": "^8.1",
+    "phpoffice/phpspreadsheet": "^2.2 || ^3.0",
+    "dompdf/dompdf": "^3.0"
+  }
+}
